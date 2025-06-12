@@ -1,1 +1,1 @@
-# Parallel_kmeans_with_Dask
+# Parallel K-means using Dask
