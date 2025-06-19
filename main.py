@@ -2,6 +2,9 @@
 try:
     from dask.distributed import Client, progress
     import dask.array as da
+    import dask.dataframe as dd
+    from engine import *
+
 except Exception:
     print('Error: Some or all modules were not properly imported')
     exit()
@@ -9,19 +12,20 @@ except Exception:
 
 # Script parameters
 RUN_MODE = 'local'
+INPUT_DATA = 'testing_data.csv'
 
 
 # Initialize local client if requested
 if RUN_MODE == 'local':
-    client = Client(processes=False, threads_per_worker=4,
-                n_workers=1, memory_limit='2GB')
+    client = Client(processes=False, threads_per_worker=1,
+                n_workers=4, memory_limit='2GB')
 
-# Create random array   
-x = da.random.random((10000, 10000), chunks=(1000, 1000))
+# Read input data
+data = dd.read_csv(INPUT_DATA)
+print(data)
 
-y = x + x.T
-z = y[::2, 5000:].mean(axis=1)
+# Stop local client
+if RUN_MODE == 'local':
+    client.close()
 
-print(z.compute())
-
-#exit()
+exit()
