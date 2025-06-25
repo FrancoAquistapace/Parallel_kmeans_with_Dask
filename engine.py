@@ -44,7 +44,7 @@ def get_XXT_term(X):
     # Turn into array
     X_da = da.array(X)
     # Get diagonal of X*X_T
-    XXT = da.diag(da.matmul(X_da, da.transpose(X_da)))
+    XXT = da.einsum('ij,ij -> i', X_da, X_da)
     return XXT
 
 
@@ -69,7 +69,7 @@ def partial_squared_dist_matrix(C, X):
     XC_term = da.matmul(X_da, da.transpose(C))
 
     # Calculate CC term
-    CC_term = da.einsum('ij,ji -> i', C, da.transpose(C))
+    CC_term = da.einsum('ij,ij -> i', C, C)
     
     return 2*XC_term + CC_term
     
