@@ -172,3 +172,44 @@ def get_centroid_weights(labels):
     '''
     unique_labels, counts = da.unique(da.array(labels), return_counts=True)
     return unique_labels, counts
+
+
+def compute_centroids(X, weights, labels, dims):
+    '''
+    Params:
+        X : array
+            Array containing data points.
+        weights : array
+            Weight for each data point.
+        labels : array
+            Set of labels indicating the cluster of
+            each data point.
+        dims : int
+            Number of dimensions of the given data.
+    Output:
+        Returns the centroids for the given data and
+        the given partition.
+    '''    
+    # Turn data into Dask array
+    X = da.array(X)
+    weights = da.array(weights)
+    
+    # Get unique labels
+    unique_l = da.unique(da.array(labels)).compute_chunk_sizes()
+
+    # Init new centroids
+    C = da.array(np.zeros(shape=(len(unique_l), dims)))
+
+    # Operate for each unique cluster
+    for i, idx in enumerate(unique_l):
+        # Get data
+        C_data = X[labels == idx, :].compute_chunk_sizes()
+        data_weights = weights[labels == idx].compute_chunk_sizes()
+
+        # Calculate weighted mean as new centroid
+        new_C = da.average(C_data, axis=0, weights=data_weights)
+
+        # Store new centroid
+        C[i,:] += new_C
+        
+    return C
