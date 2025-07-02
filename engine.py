@@ -350,7 +350,7 @@ def k_means_parallel(path, k, l, client, random_seed=None, label_column=None,
             print(f'Iteration {i+1} of {O_log_phi}')
             
         # Sample new centroids
-        C_prime = sample_new_centroids(C, X, XXT, phi, L)
+        C_prime = sample_new_centroids(C, X, XXT, phi, l)
     
         # Add to the current centroids
         C = da.vstack([C, C_prime]).compute()
@@ -390,7 +390,7 @@ def k_means_parallel(path, k, l, client, random_seed=None, label_column=None,
     
     # Initialize k final centroids, as the k-th heaviest
     # centroids from the previous step
-    C_f = C[np.isin(w_C, np.sort(w_C, )[len(w_C)-K:])]
+    C_f = C[np.isin(w_C, np.sort(w_C, )[len(w_C)-k:])]
     
     # Calculate XXT for centroids
     CCT =  get_XXT_term(C).persist()
