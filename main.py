@@ -1,9 +1,14 @@
 # Importing necessary modules
 try:
-    from dask.distributed import Client, progress
+    # Dask
+    from dask.distributed import Client, SSHCluster, progress
     import dask.array as da
     import dask.dataframe as dd
+    # Others
     import numpy as np
+    import pandas as pd
+    import time
+    from sklearn.datasets import fetch_rcv1
     from engine import *
 
 except Exception:
@@ -12,55 +17,41 @@ except Exception:
 
 
 # Script parameters
-RUN_MODE = 'local'
+RUN_MODE = 'ssh'
 RANDOM_SEED = 42
 INPUT_DATA = 'testing_data.csv'
 LABEL_COLUMN = 'label'
-
+NPARTITIONS = 1
+K = 3 # Number of clusters
+L = 3 # Oversampling factor
+VERBOSE = 2 # Amount of information to print out (0: Nothing, 1: Only timings, 2: All information)
 
 # Initialize local client if requested
 if RUN_MODE == 'local':
-    import webbrowser
     client = Client(processes=False, threads_per_worker=1,
                 n_workers=4, memory_limit='2GB')
-    #webbrowser.open(client.dashboard_link)
 
+# Initialize 
+elif RUN_MODE == 'ssh':
+    cluster = SSHCluster(
+        ["10.67.22.240", "10.67.22.17", "10.67.22.100", "10.67.22.126"],
+        connect_options={"known_hosts": None},
+        worker_options={"nthreads": 2},
+        scheduler_options={"port": 0, "dashboard_address": ":8787"}
+    )
+    client = Client(cluster)
 
-# Initialize random number generator from Dask and numpy seed
-rng = da.random.default_rng(RANDOM_SEED)
-np.random.seed(RANDOM_SEED)
-
-
-# Read input data
-data = dd.read_csv(INPUT_DATA)
-
-
-# Dummy input to keep the dashboard active
-a = ''#input('Press ENTER to proceed or type "Exit" to quit program:')
-while a not in ['', 'Exit']:
-    a = input('Press ENTER to proceed or type "Exit" to quit program:')
-
-if a == "Exit":
-    # Stop local client
-    if RUN_MODE == 'local':
-        client.close()
+else:
+    print(f'Run mode {RUN_MODE} not supported')
     exit()
 
 
-# Run the K-means algorithm
-C = get_first_sample(INPUT_DATA)
-if LABEL_COLUMN != None:
-    C.drop(columns=[LABEL_COLUMN], inplace=True)
-C = [np.array(C)]
+# Run main script:
+# Run k-means
+test_res = k_means_parallel(INPUT_DATA, K, L, random_seed=RANDOM_SEED, label_column=LABEL_COLUMN,
+                     datatype='dataframe', npartitions=NPARTITIONS, verbose=VERBOSE)
 
-
-
-
-# Keep dashboard active until user closes it
-a = ''#input('Process finished, press ENTER to exit the program:')
-
-# Stop local client
-if RUN_MODE == 'local':
-    client.close()
+# Close client
+client.close()
 
 exit()
