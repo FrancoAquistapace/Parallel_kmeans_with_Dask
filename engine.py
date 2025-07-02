@@ -252,14 +252,18 @@ def k_means_parallel(path, k, l, random_seed=None, label_column=None,
             - cluster_labels : array  -> Cluster assignments
             - timing : dict           -> Performance information
     '''
+    # Begin overall timing
+    t1 = time.time()
+    
     # Initialize random number generator from Dask and numpy seed
     if random_seed != None:
         rng = da.random.default_rng(random_seed)
         np.random.seed(random_seed)
 
     # Read input data
+    t_data = time.time()
     if verbose == 2:
-        print('Reading input data\n')
+        print('Reading input data')
 
     if path not in ['rcv1']:
         data = pd.read_csv(path)
@@ -270,8 +274,10 @@ def k_means_parallel(path, k, l, random_seed=None, label_column=None,
         rcv1 = fetch_rcv1()
         data = rcv1.data
         data_shape = data.shape
+    dt_data = time.time() - t_data
 
     # Separate labels from input
+    t_data_process = time.time()
     if label_column != None:
         # Labels
         future = client.scatter(data[label_column])  # send labels to one worker
@@ -295,9 +301,14 @@ def k_means_parallel(path, k, l, random_seed=None, label_column=None,
         X = dd.from_delayed([future], meta=X, shape=data_shape)  # build dask.dataframe on remote data
         X = X.repartition(npartitions=npartitions).persist()  # split
         client.rebalance(X)  # spread around all of your workers
+        
+    dt_data_process = time.time() - t_data_process
+    if verbose > 0:
+        print(f'Data loaded and processed in {round(dt_data_process + dt_data, 1)} s')
 
     # Run the K-means algorithm:
     # Get first sample as initial centroid
+    t_first_centroid = time.time()
     if path not in ['rcv1']:
         first_sample = get_first_sample(path)
     elif path == 'rcv1':
@@ -307,12 +318,18 @@ def k_means_parallel(path, k, l, random_seed=None, label_column=None,
         first_sample = first_sample.drop(columns=[label_column])
     C = da.array([np.array(first_sample).flatten()])
 
+    dt_first_centroid = time.time() - t_first_centroid
+    
     # Calculate constant XXT term, 
     # also persist since we are going to reuse it 
+    t_xxt = time.time()
     XXT = get_XXT_term(X).persist()
+    dt_xxt = time.time() - t_xxt
     
     # Get initial cost function
+    t_phi_init = time.time()
     phi_init = cost_function(C, X, XXT).compute()
+    dt_phi_init = time.time() - t_phi_init
     
     # Get number of iterations of the || algorithm
     O_log_phi = round(np.log(phi_init))
@@ -321,8 +338,9 @@ def k_means_parallel(path, k, l, random_seed=None, label_column=None,
     phi = phi_init.copy()
 
     # Proceed with main || loop
+    t_parallel_init = time.time()
     if verbose == 2:
-        print('Running K-means|| initialization:')
+        print('\nRunning K-means|| initialization:')
     for i in range(O_log_phi):
         if verbose == 2:
             print(f'Iteration {i+1} of {O_log_phi}')
@@ -343,17 +361,26 @@ def k_means_parallel(path, k, l, random_seed=None, label_column=None,
         # Print initial vs. final cost
         print('Cost before initialization:', phi_init)
         print('Cost after initialization:', phi)
+
+    dt_parallel_init = time.time() - t_parallel_init
+    if verbose > 0:
+        print(f'K-means|| initialization finished in {round(dt_parallel_init, 1)} s')
     
     # Get the weight of each centroid
     if verbose == 2:
         print('\nCalculating centroid weights')
-        
+    t_weight_calc = time.time()
     X_labels = get_cluster_classification(C, X, XXT).compute_chunk_sizes()
     used_C, w_C = get_centroid_weights(X_labels)
     used_C = used_C.compute()
     w_C = w_C.compute()
 
+    dt_weight_calc = time.time() - t_weight_calc
+    if verbose > 0:
+        print(f'Centroid weight calculation finished in {round(dt_weight_calc, 1)} s')
+
     # Proceed with Lloyd's algorithm on the centroids
+    t_lloyd = time.time()
     if verbose == 2:
         print('\nClustering centroids')
     
@@ -386,15 +413,41 @@ def k_means_parallel(path, k, l, random_seed=None, label_column=None,
     
         # Increase step counter
         N_lloyd_steps += 1
+    dt_lloyd = time.time() - t_lloyd
     
     if verbose == 2:
-        print(f'Centroid clustering finished after {N_lloyd_steps} iterations.')
+        print(f'Centroid clustering finished after {N_lloyd_steps} iterations and {round(dt_lloyd)} s')
+    elif verbose == 1:
+        print(f'\nLloyd algorithm finished in {round(dt_lloyd)} s')
     
     # Compute final labels
+    if verbose == 2:
+        print('\nCalculating final labels')
+    t_final_labels = time.time()
     final_labels = get_cluster_classification(C_f, X, XXT).compute()
+    dt_final_labels = time.time() - t_final_labels
+    if verbose > 0:
+        print(f'Final labels calculated in {round(dt_final_labels)} s')
 
+    # Finish timing
+    dt_total = time.time() - t1
+    if verbose > 0:
+        print(f'\nProcess finished in {round(dt_total, 1)} s')
+
+    # Build performance info
+    timing = {'total': dt_total,
+              'data_input': dt_data,
+              'data_processing': dt_data_process,
+              'first_centroid': dt_first_centroid,
+              'xxt': dt_xxt,
+              'phi_init': dt_phi_init, 
+              'parallel_init': dt_parallel_init, 
+              'weight_calc': dt_weight_calc, 
+              'lloyd' : dt_lloyd, 
+              'final_labels': dt_final_labels}
+    
     # Gather output info into a dict and return
     output_info = {'centroids': C_f,
                    'cluster_labels': final_labels,
-                   'timing': None}
+                   'timing': timing}
     return output_info
