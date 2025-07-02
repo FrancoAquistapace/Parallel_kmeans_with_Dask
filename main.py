@@ -34,7 +34,7 @@ if RUN_MODE == 'local':
 # Initialize 
 elif RUN_MODE == 'ssh':
     cluster = SSHCluster(
-        ["10.67.22.240", "10.67.22.17", "10.67.22.100", "10.67.22.126"],
+        ["10.67.22.240", "10.67.22.240", "10.67.22.17", "10.67.22.100", "10.67.22.126"],
         connect_options={"known_hosts": None},
         worker_options={"nthreads": 2},
         scheduler_options={"port": 0, "dashboard_address": ":8787"}
