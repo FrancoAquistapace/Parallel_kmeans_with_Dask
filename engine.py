@@ -213,3 +213,188 @@ def compute_centroids(X, weights, labels, dims):
         C[i,:] += new_C
         
     return C
+
+
+# Complete k-means pipeline
+def k_means_parallel(path, k, l, random_seed=None, label_column=None,
+                     datatype='dataframe', npartitions=1, chunk_size=1000,
+                     verbose=2):
+    '''
+    Params:
+        path : str
+            Path to the file containing the input data. If "rcv1", then
+            the RCV1 dataset is downloaded inside the function.
+        k : int
+            Number of clusters to use.
+        l : int or float
+            Oversampling factor for the K-means|| initialization method.
+        random_seed : int (optional)
+            Seed for the random number generators. Not used by default.
+        label_column : str (optional)
+            Name of the column containing the labels of the data. Not
+            used by default.
+        datatype : str (optional)
+            Either "dataframe" (default) or "array". Indicates how to
+            process the input data.
+        npartitions : int (optional)
+            Number of partitions to use if the data is processed as a
+            dataframe. Default is 1.
+        chunk_size : int (optional)
+            Chunk size to use if the data is processed as an array.
+            Default is 1000.
+        verbose : int (optional)
+            Amount of information to print. If 0, no information is 
+            printed. If 1, only timing information is printed. If 2
+            (default), all information is printed.
+    Output:
+        Returns a dictionary with the following elements:
+            - centroids : array       -> Centroid positions
+            - cluster_labels : array  -> Cluster assignments
+            - timing : dict           -> Performance information
+    '''
+    # Initialize random number generator from Dask and numpy seed
+    if random_seed != None:
+        rng = da.random.default_rng(random_seed)
+        np.random.seed(random_seed)
+
+    # Read input data
+    if verbose == 2:
+        print('Reading input data\n')
+
+    if path not in ['rcv1']:
+        data = pd.read_csv(path)
+        data_shape = data.shape
+        
+    elif path == 'rcv1':
+        # Load RCV1 dataset
+        rcv1 = fetch_rcv1()
+        data = rcv1.data
+        data_shape = data.shape
+
+    # Separate labels from input
+    if label_column != None:
+        # Labels
+        future = client.scatter(data[label_column])  # send labels to one worker
+        y_true = dd.from_delayed([future], meta=data[label_column])  # build dask.dataframe on remote data
+        y_true = y_true.repartition(npartitions=npartitions).persist()  # split
+        client.rebalance(y_true)  # spread around all of your workers
+    
+        # Input
+        X_width = data_shape[1]-1
+        X = data.drop(columns=[label_column])
+        future = client.scatter(X) # send data to one worker
+        X = dd.from_delayed([future], meta=X)  # build dask.dataframe on remote data
+        X = X.repartition(npartitions=npartitions).persist()  # split
+        client.rebalance(X)  # spread around all of your workers
+        
+    else:
+        # Only input
+        X_width = data_shape[1]
+        X = data
+        future = client.scatter(X) # send data to one worker
+        X = dd.from_delayed([future], meta=X, shape=data_shape)  # build dask.dataframe on remote data
+        X = X.repartition(npartitions=npartitions).persist()  # split
+        client.rebalance(X)  # spread around all of your workers
+
+    # Run the K-means algorithm:
+    # Get first sample as initial centroid
+    if path not in ['rcv1']:
+        first_sample = get_first_sample(path)
+    elif path == 'rcv1':
+        first_sample = data[0,:].toarray()
+        
+    if label_column != None:
+        first_sample = first_sample.drop(columns=[label_column])
+    C = da.array([np.array(first_sample).flatten()])
+
+    # Calculate constant XXT term, 
+    # also persist since we are going to reuse it 
+    XXT = get_XXT_term(X).persist()
+    
+    # Get initial cost function
+    phi_init = cost_function(C, X, XXT).compute()
+    
+    # Get number of iterations of the || algorithm
+    O_log_phi = round(np.log(phi_init))
+    
+    # Init current cost
+    phi = phi_init.copy()
+
+    # Proceed with main || loop
+    if verbose == 2:
+        print('Running K-means|| initialization:')
+    for i in range(O_log_phi):
+        if verbose == 2:
+            print(f'Iteration {i+1} of {O_log_phi}')
+            
+        # Sample new centroids
+        C_prime = sample_new_centroids(C, X, XXT, phi, L)
+    
+        # Add to the current centroids
+        C = da.vstack([C, C_prime]).compute()
+    
+        # Calculate new cost and update current
+        phi = cost_function(C, X, XXT).compute()
+    
+    if verbose == 2:
+        # Print number of final centroids from ||
+        print('\nNumber of initialized centroids:', C.shape[0])
+        
+        # Print initial vs. final cost
+        print('Cost before initialization:', phi_init)
+        print('Cost after initialization:', phi)
+    
+    # Get the weight of each centroid
+    if verbose == 2:
+        print('\nCalculating centroid weights')
+        
+    X_labels = get_cluster_classification(C, X, XXT).compute_chunk_sizes()
+    used_C, w_C = get_centroid_weights(X_labels)
+    used_C = used_C.compute()
+    w_C = w_C.compute()
+
+    # Proceed with Lloyd's algorithm on the centroids
+    if verbose == 2:
+        print('\nClustering centroids')
+    
+    # Initialize k final centroids, as the k-th heaviest
+    # centroids from the previous step
+    C_f = C[np.isin(w_C, np.sort(w_C, )[len(w_C)-K:])]
+    
+    # Calculate XXT for centroids
+    CCT =  get_XXT_term(C).persist()
+    
+    # Perform iterative adjustments
+    lloyd_done = False
+    N_lloyd_steps = 0
+    while not lloyd_done:
+        # Save old labels (after first iteration)
+        if N_lloyd_steps > 0:
+            old_labels = C_labels.copy()
+        
+        # Calculate current clustering
+        C_labels = get_cluster_classification(C_f, C, CCT).persist()
+    
+        # Compute new centroids from mean within clusters
+        C_f = compute_centroids(C, w_C, C_labels, X_width).compute()
+        
+        # Check for termination condition (after first iteration)
+        if N_lloyd_steps > 0:
+            different_labels = da.sum(old_labels != C_labels).compute()
+            if different_labels == 0:
+                lloyd_done = True
+    
+        # Increase step counter
+        N_lloyd_steps += 1
+    
+    if verbose == 2:
+        print(f'Centroid clustering finished after {N_lloyd_steps} iterations.')
+    
+    # Compute final labels
+    final_labels = get_cluster_classification(C_f, X, XXT).compute()
+
+    # Gather output info into a dict and return
+    output_info = {'centroids': C_f,
+                   'cluster_labels': final_labels,
+                   'timing': None}
+    return output_info
