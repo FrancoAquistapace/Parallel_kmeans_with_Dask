@@ -48,7 +48,7 @@ else:
 
 # Run main script:
 # Run k-means
-test_res = k_means_parallel(INPUT_DATA, K, L, random_seed=RANDOM_SEED, label_column=LABEL_COLUMN,
+test_res = k_means_parallel(INPUT_DATA, K, L, client, random_seed=RANDOM_SEED, label_column=LABEL_COLUMN,
                      datatype='dataframe', npartitions=NPARTITIONS, verbose=VERBOSE)
 
 # Close client

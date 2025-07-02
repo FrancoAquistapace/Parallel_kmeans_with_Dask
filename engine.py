@@ -218,7 +218,7 @@ def compute_centroids(X, weights, labels, dims):
 
 
 # Complete k-means pipeline
-def k_means_parallel(path, k, l, random_seed=None, label_column=None,
+def k_means_parallel(path, k, l, client, random_seed=None, label_column=None,
                      datatype='dataframe', npartitions=1, chunk_size=1000,
                      verbose=2):
     '''
@@ -230,6 +230,8 @@ def k_means_parallel(path, k, l, random_seed=None, label_column=None,
             Number of clusters to use.
         l : int or float
             Oversampling factor for the K-means|| initialization method.
+        client : dask Client
+            Client from which to run all operations.
         random_seed : int (optional)
             Seed for the random number generators. Not used by default.
         label_column : str (optional)
