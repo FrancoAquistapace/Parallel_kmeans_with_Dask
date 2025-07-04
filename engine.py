@@ -140,7 +140,10 @@ def sample_new_centroids(C, X, XXT, phi, l):
     C_prime_idx = rand_nums < p_X
 
     # Gather new centroids from the data
-    C_prime = X.loc[C_prime_idx]
+    if isinstance(X, dd.DataFrame):
+        C_prime = X.loc[C_prime_idx]
+    else:
+        C_prime = X[C_prime_idx]
     return C_prime
 
 def get_cluster_classification(C, X, XXT):
@@ -218,9 +221,9 @@ def compute_centroids(X, weights, labels, dims):
 
 
 # Complete k-means pipeline
-def k_means_parallel(path, k, l, client, random_seed=None, label_column=None,
+def k_means_parallel(path, k, l, random_seed=None, label_column=None,
                      datatype='dataframe', npartitions=1, chunk_size=1000,
-                     verbose=2):
+                     verbose=2, data=None):
     '''
     Params:
         path : str
@@ -230,8 +233,6 @@ def k_means_parallel(path, k, l, client, random_seed=None, label_column=None,
             Number of clusters to use.
         l : int or float
             Oversampling factor for the K-means|| initialization method.
-        client : dask Client
-            Client from which to run all operations.
         random_seed : int (optional)
             Seed for the random number generators. Not used by default.
         label_column : str (optional)
@@ -250,6 +251,9 @@ def k_means_parallel(path, k, l, client, random_seed=None, label_column=None,
             Amount of information to print. If 0, no information is 
             printed. If 1, only timing information is printed. If 2
             (default), all information is printed.
+        data : array (optional)
+            Predefned data to run the algorithm on. If given, then path
+            is ignored. Not used by default.
     Output:
         Returns a dictionary with the following elements:
             - centroids : array       -> Centroid positions
@@ -264,46 +268,43 @@ def k_means_parallel(path, k, l, client, random_seed=None, label_column=None,
         rng = da.random.default_rng(random_seed)
         np.random.seed(random_seed)
 
-    # Read input data
+    # Read input data (if not given)
     t_data = time.time()
-    if verbose == 2:
-        print('Reading input data')
-
-    if path not in ['rcv1']:
-        data = pd.read_csv(path)
-        data_shape = data.shape
-        
-    elif path == 'rcv1':
-        # Load RCV1 dataset
-        rcv1 = fetch_rcv1()
-        data = rcv1.data
+    if type(data) == type(None):
+        pre_data = False
+        if verbose == 2:
+            print('Reading input data')
+    
+        if path not in ['rcv1']:
+            data = pd.read_csv(path)
+            data_shape = data.shape
+            
+        elif path == 'rcv1':
+            # Load RCV1 dataset
+            rcv1 = fetch_rcv1()
+            data = rcv1.data
+            data_shape = data.shape
+    else:
+        pre_data = True
         data_shape = data.shape
     dt_data = time.time() - t_data
 
     # Separate labels from input
     t_data_process = time.time()
     if label_column != None:
-        # Labels
-        future = client.scatter(data[label_column])  # send labels to one worker
-        y_true = dd.from_delayed([future], meta=data[label_column])  # build dask.dataframe on remote data
-        y_true = y_true.repartition(npartitions=npartitions).persist()  # split
-        client.rebalance(y_true)  # spread around all of your workers
-    
         # Input
         X_width = data_shape[1]-1
         X = data.drop(columns=[label_column])
-        future = client.scatter(X) # send data to one worker
-        X = dd.from_delayed([future], meta=X)  # build dask.dataframe on remote data
-        X = X.repartition(npartitions=npartitions).persist()  # split
+        X = dd.from_pandas(X, npartitions=npartitions)
+        X = X.persist()  # split
         client.rebalance(X)  # spread around all of your workers
         
     else:
         # Only input
         X_width = data_shape[1]
         X = data
-        future = client.scatter(X) # send data to one worker
-        X = dd.from_delayed([future], meta=X, shape=data_shape)  # build dask.dataframe on remote data
-        X = X.repartition(npartitions=npartitions).persist()  # split
+        X = dd.from_pandas(X, npartitions=npartitions)
+        X = X.persist()  # split
         client.rebalance(X)  # spread around all of your workers
         
     dt_data_process = time.time() - t_data_process
@@ -314,7 +315,10 @@ def k_means_parallel(path, k, l, client, random_seed=None, label_column=None,
     # Get first sample as initial centroid
     t_first_centroid = time.time()
     if path not in ['rcv1']:
-        first_sample = get_first_sample(path)
+        if pre_data:
+            first_sample = np.array(X[0,:])
+        else:
+            first_sample = get_first_sample(path)
     elif path == 'rcv1':
         first_sample = data[0,:].toarray()
         
